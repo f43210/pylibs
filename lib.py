@@ -7,6 +7,7 @@ import re
 import sys
 import urllib.request
 import itertools
+import shutil
 
 # reload(sys)
 # sys.setdefaultencoding('utf-8')
@@ -85,6 +86,21 @@ def rmFilesWithExt(dir, ext, deep = False):
 				rmFilesWithExt(fPath, ext, deep)
 		elif f.endswith(ext):
 			os.remove(fPath)
+
+def cpDir(dir, targetDir, deep = True, cover = True):
+	for f in os.listdir(dir):
+		fPath = os.path.join(dir, f)
+		targetF = os.path.join(targetDir, f)
+		if os.path.isdir(fPath):
+			if deep:
+				if not os.path.exists(targetF):
+					os.mkdir(targetF)
+				cpDir(fPath, targetF, deep, cover)
+		else:
+			if os.path.exists(targetF):
+				if cover:
+					os.remove(targetF)
+			shutil.copy(fPath, targetF)
 
 def compressJs(array, dst, isReleased, isDropConsole):
 	command = "uglifyjs "
@@ -181,10 +197,28 @@ def encryDir(dir, key, ext, replaceExt = None):
 		with open(jsList[i][:-lenext] + replaceExt, "wb") as _to:
 			_to.write(encrypt(_content, key))
 		os.remove(jsList[i])
+def patchFiles(files, publishDir, ip, patchRoot, user, checkDir = False):
+	dirDicts = []
+	for i in range(0, len(files)):
+	 	res = files[i]
+	 	resdir = os.path.dirname(res)
+	 	if checkDir:
+	 		isCheck = True
+		 	if resdir in dirDicts:
+		 		isCheck = False
+		 	else:
+			 	for j in range(0, len(dirDicts)):
+			 		if dirDicts[j].startswith(resdir):
+			 			isCheck = False
+			 			break
+		 	if isCheck:
+			 	os.system('ssh ' + user + "@" + ip + ' "[-d ' + patchRoot + '/' + resdir + '] && echo ok || mkdir -p ' + patchRoot + '/' + resdir + '"')
+			 	dirDicts.append(resdir)
+	 	os.system('scp -pv ' + publishDir + '/' + res + ' ' + user + '@' + ip + ":" + patchRoot + '/' + resdir)
 
-def patch(publishDir, ip, patchRoot, user = "root"):
-	print("************************start patch**************************")
-	patchAssets = []
+def patch(publishDir, ip, patchRoot, isPrePatch = False, user = "root"):
+	patchUpAssets = []
+	patchAdAssets = []
 	manifests = []
 	listDir(publishDir, [], manifests, "project.manifest", False)
 	for i in range(0, len(manifests)):
@@ -196,35 +230,41 @@ def patch(publishDir, ip, patchRoot, user = "root"):
 				remoteAssets = remotemf["assets"]
 				for res in mf["assets"]:
 					if res in remoteAssets:
-						if remoteAssets[res]["md5"] != mf["assets"][res]["md5"]:
-							patchAssets.append(res)
+						if remoteAssets[res]["md5"] != mf["assets"][res]["md5"] and res not in patchUpAssets:
+							patchUpAssets.append(res)
 							print("[U]\t" + res)
 					else:
-						patchAssets.append(res)
-						print("[A]\t" + res)
+						if res not in patchAdAssets:
+							patchAdAssets.append(res)
+							print("[A]\t" + res)
 		except:
 			for res in mf["assets"]:
-				patchAssets.append(res)
-				print("[A]\t" + res)
-	exec_confirm = input('start patch?   (y/n)\n')
-	if isyes(exec_confirm):
-		dirDicts = []
-		for i in range(0, len(patchAssets)):
-		 	res = patchAssets[i]
-		 	resdir = os.path.dirname(res)
-		 	isCheck = True
-		 	if resdir in dirDicts:
-		 		isCheck = False
-		 	else:
-			 	for j in range(0, len(dirDicts)):
-			 		if dirDicts[j].startswith(resdir):
-			 			isCheck = False
-			 			break
-		 	if isCheck:
-			 	os.system('ssh ' + user + "@" + ip + ' "[-d ' + patchRoot + resdir + '] && echo ok || mkdir -p ' + patchRoot + resdir + '"')
-			 	dirDicts.append(resdir)
-		 	os.system('scp -pv ' + publishDir + '/' + res + ' ' + user + '@' + ip + ":" + patchRoot + resdir)
-		os.system('scp ' + publishDir + "/*.manifest " + user + '@' + ip + ":" + patchRoot)
-		print("************************patch successed**************************")
+				if res not in patchAdAssets:
+					patchAdAssets.append(res)
+					print("[A]\t" + res)
+	print("add:", len(patchAdAssets), " update:", len(patchUpAssets))
+	if len(patchAdAssets) > 0 or len(patchUpAssets) > 0:
+		if isPrePatch:
+			print("************************start pre-patch**************************")
+			exec_confirm = input('start patch?   (y/n)\n')
+			if isyes(exec_confirm):
+				prePatchRoot = patchRoot + ".pre"
+				os.system('ssh ' + user + "@" + ip + ' "rm -rf ' + prePatchRoot + ' && cp -pr ' + patchRoot + ' ' + prePatchRoot + '"')
+				patchFiles(patchUpAssets, publishDir, ip, prePatchRoot, user)
+				patchFiles(patchAdAssets, publishDir, ip, prePatchRoot, user, True)
+				os.system('scp ' + publishDir + "/*.manifest " + user + '@' + ip + ":" + prePatchRoot)
+				print("************************pre-patch successed**************************")
+			else:
+				print("************************pre-patch canceled**************************")
+		else:
+			print("************************start patch**************************")
+			exec_confirm = input('start patch?   (y/n)\n')
+			if isyes(exec_confirm):
+				patchFiles(patchUpAssets, publishDir, ip, patchRoot, user)
+				patchFiles(patchAdAssets, publishDir, ip, patchRoot, user, True)
+				os.system('scp ' + publishDir + "/*.manifest " + user + '@' + ip + ":" + patchRoot)
+				print("************************patch successed**************************")
+			else:
+				print("************************patch canceled**************************")
 	else:
-		print("************************patch canceled**************************")
+		print("no files need to patch!")
